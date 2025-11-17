@@ -6,6 +6,7 @@ library(ggplot2)
 library(shinythemes)
 library(lubridate)
 library(shinyWidgets)
+library(stringr)
 movie <- read.csv("./movies.csv")
 
 movie <- movie %>%
@@ -176,7 +177,40 @@ ui <- fluidPage(
           uiOutput("invest_charts_area")
         )
       )
-    )
+    ),
+    tabPanel(
+        "Combo Analysis",
+        sidebarLayout(
+          sidebarPanel(
+            h4("Genre Combination Analysis"),
+            helpText("分析不同类型组合的盈利能力和受欢迎程度。"),
+            
+            # (创建一个新的指标选择器，包含 'Profit' 和 'Popularity')
+            selectInput("combo_metric", "Select Metric for 'Best':",
+                          choices = c(
+                            "Median ROI" = "avg_roi",
+                            "Median Profit" = "avg_profit",
+                            "Average Rating" = "avg_rating",
+                            "Movie Count" = "count"
+                          ),
+                          selected = "avg_roi"),
+            
+            numericInput("combo_min_count", "Minimum Movies per Combo:",
+                         value = 10, min = 1),
+            
+            sliderInput("combo_top_n", "Show Top N Combinations:",
+                       min = 5, max = 50, value = 20)
+          ),
+          mainPanel(
+            h4("Top Genre Combinations"),
+            plotOutput("combo_plot"),
+            
+            hr(),
+            h4("Combination Data"),
+            tableOutput("combo_table")
+          )
+        )
+      )
   )
 )
 
@@ -644,6 +678,116 @@ server <- function(input, output, session) {
 
     paste(movie_genre_strings, collapse = "\n")
   })
+
+  # --- Combo Analysis Tab ---
+  
+  # 创建所有组合的聚合数据
+  reactive_combo_data <- reactive({
+    req(movie)
+    
+    # 计算 profit 和 roi
+    movie_with_metrics <- movie %>%
+      mutate(
+        profit = revenue - budget,
+        roi = (revenue - budget) / budget
+      )
+
+    # 创建标准化的组合名称, e.g., "Action/Comedy/Thriller"
+    movie_with_combos <- movie_with_metrics %>%
+      rowwise() %>%
+      mutate(
+        clean_genres = str_replace_all(genres_list, "\\[|\\]|'", ""),
+        genre_vector = str_split(clean_genres, ", "),
+        sorted_genres = list(sort(unlist(genre_vector))),
+        genre_combo = paste(sorted_genres, collapse = " / ")
+      ) %>%
+      ungroup() %>%
+      filter(genre_combo != "" & !is.na(genre_combo))
+
+    # 按组合分组并汇总
+    movie_with_combos %>%
+      group_by(genre_combo) %>%
+      summarise(
+        count = n(),
+        avg_profit = median(profit, na.rm = TRUE),
+        avg_roi = median(roi, na.rm = TRUE),
+        avg_rating = mean(vote_average, na.rm = TRUE)
+      ) %>%
+
+      filter(is.finite(avg_roi))
+  })
+  
+  # 根据 UI 输入筛选聚合数据
+  filtered_combo_data <- reactive({
+    req(reactive_combo_data())
+    
+    metric_to_sort <- input$combo_metric
+    
+    reactive_combo_data() %>%
+      filter(count >= input$combo_min_count) %>%
+      arrange(desc(!!sym(metric_to_sort))) %>%
+      slice_head(n = input$combo_top_n)
+  })
+  
+
+  output$combo_plot <- renderPlot({
+    
+    plot_data <- filtered_combo_data()
+    metric_to_plot <- input$combo_metric
+    metric_label <- names(which(c(
+      "avg_roi" = "Median ROI",
+      "avg_profit" = "Median Profit",
+      "avg_rating" = "Average Rating",
+      "count" = "Movie Count"
+    ) == metric_to_plot))
+    
+    if (is.null(plot_data) || nrow(plot_data) == 0) {
+      plot.new()
+      text(0.5, 0.5, "No combinations found matching your criteria.")
+      return()
+    }
+    
+    y_axis_format <- if (metric_to_plot == "median_roi") {
+      scales::percent
+    } else if (metric_to_plot == "median_profit") {
+      scales::dollar
+    } else if (metric_to_plot == "avg_rating") {
+      scales::number
+    } else {
+      scales::comma
+    }
+
+    ggplot(plot_data, aes(x = reorder(genre_combo, !!sym(metric_to_plot)), 
+                          y = !!sym(metric_to_plot),
+                          fill = count)) +
+      geom_col() +
+      coord_flip() +
+      scale_y_continuous(labels = y_axis_format) +
+      scale_fill_gradient(low = "lightblue", high = "darkblue") +
+      labs(
+        title = paste("Top", input$combo_top_n, "Genre Combinations by", metric_label),
+        x = "Genre Combination",
+        y = metric_label,
+        fill = "Movie Count"
+      ) +
+      theme_minimal()
+  })
+
+  output$combo_table <- renderTable({
+    filtered_combo_data() %>%
+      mutate(
+        avg_profit = scales::dollar(avg_profit, accuracy = 1),
+        avg_roi = scales::percent(avg_roi, accuracy = 0.1),
+        avg_rating = round(avg_rating, 2)
+      ) %>%
+      rename(
+        "Genre Combination" = genre_combo,
+        "Movie Count" = count,
+        "Median Profit" = avg_profit,
+        "Median ROI" = avg_roi,
+        "Avg Rating" = avg_rating
+      )
+  }, striped = TRUE)
 }
 
 shinyApp(ui = ui, server)
