@@ -185,9 +185,7 @@ ui <- fluidPage(
         sidebarLayout(
           sidebarPanel(
             h4("Genre Combination Analysis"),
-            helpText("分析不同类型组合的盈利能力和受欢迎程度。"),
-            
-            # (创建一个新的指标选择器，包含 'Profit' 和 'Popularity')
+            helpText("Analyze the profitability and popularity of different types of combinations."),
             selectInput("combo_metric", "Select Metric for 'Best':",
                           choices = c(
                             "Median ROI" = "avg_roi",
@@ -761,19 +759,17 @@ server <- function(input, output, session) {
   })
 
   # --- Combo Analysis Tab ---
-  
-  # 创建所有组合的聚合数据
   reactive_combo_data <- reactive({
     req(movie)
     
-    # 计算 profit 和 roi
+    # calcu profit and roi
     movie_with_metrics <- movie %>%
       mutate(
         profit = revenue - budget,
         roi = (revenue - budget) / budget
       )
 
-    # 创建标准化的组合名称, e.g., "Action/Comedy/Thriller"
+    # "Action/Comedy/Thriller"
     movie_with_combos <- movie_with_metrics %>%
       rowwise() %>%
       mutate(
@@ -785,7 +781,6 @@ server <- function(input, output, session) {
       ungroup() %>%
       filter(genre_combo != "" & !is.na(genre_combo))
 
-    # 按组合分组并汇总
     movie_with_combos %>%
       group_by(genre_combo) %>%
       summarise(
@@ -797,8 +792,7 @@ server <- function(input, output, session) {
 
       filter(is.finite(avg_roi))
   })
-  
-  # 根据 UI 输入筛选聚合数据
+
   filtered_combo_data <- reactive({
     req(reactive_combo_data())
     
